@@ -354,25 +354,51 @@ export function filterSupabaseInternalTables(models: string[]): string[] {
     'flow_state',
   ];
   
-  return models.filter(model => {
-    // Extract model/table name
-    const nameMatch = model.match(/model\s+(\w+)/);
-    const mapMatch = model.match(/@@map\(["'](\w+)["']\)/);
-    const name = mapMatch?.[1] || nameMatch?.[1] || '';
-    
-    // Check exclusions
-    if (excludeNames.includes(name.toLowerCase())) {
-      return false;
-    }
-    
-    for (const pattern of excludePatterns) {
-      if (pattern.test(name)) {
+  return models
+    .filter(model => {
+      // Extract model/table name
+      const nameMatch = model.match(/model\s+(\w+)/);
+      const mapMatch = model.match(/@@map\(["'](\w+)["']\)/);
+      const name = mapMatch?.[1] || nameMatch?.[1] || '';
+      
+      // Check exclusions
+      if (excludeNames.includes(name.toLowerCase())) {
         return false;
       }
-    }
-    
-    return true;
-  });
+      
+      for (const pattern of excludePatterns) {
+        if (pattern.test(name)) {
+          return false;
+        }
+      }
+      
+      return true;
+    })
+    .map(model => {
+      // Remove relations that reference auth.users (the Supabase users table)
+      // These lines look like: users users? @relation(...)
+      // or: users_xxx users? @relation("xxx", ...)
+      const lines = model.split('\n');
+      const filteredLines = lines.filter(line => {
+        const trimmed = line.trim();
+        
+        // Skip lines that reference 'users' type (Supabase auth.users)
+        // Patterns:
+        // - users users? @relation(...)
+        // - users users @relation(...)
+        // - users_xxx_Tousers users? @relation(...)
+        // - users_xxx users? @relation(...)
+        if (/\s+users\s*\??\s+@relation\(/.test(line)) {
+          return false;
+        }
+        if (/\s+users\s+@relation\(/.test(line)) {
+          return false;
+        }
+        
+        return true;
+      });
+      return filteredLines.join('\n');
+    });
 }
 
 /**

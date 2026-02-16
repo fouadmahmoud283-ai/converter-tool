@@ -14,7 +14,7 @@ import { extractDependencies } from './utils/dependencies.js';
 import { extractEnvVariables } from './utils/env.js';
 import { Logger } from './utils/logger.js';
 import { ConverterConfig, defaultConfig } from './config.js';
-import { autoSetupAndRun, copyEnvFile, autoSetupSelfHosted } from './utils/autorun.js';
+import { autoSetupAndRun, autoSetupSelfHosted } from './utils/autorun.js';
 
 const require = createRequire(import.meta.url);
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -127,9 +127,6 @@ export async function convertRepository(options: ConvertOptions): Promise<void> 
 
   // Generate migration report
   await writeMigrationReport(targetDir, functionsInfo, allEnvVars);
-
-  // Copy .env from original project
-  await copyEnvFile(targetDir, backendDir, logger);
 
   logger.success('Conversion complete!');
   logger.success(`Backend created at: ${backendDir}`);

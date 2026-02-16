@@ -113,14 +113,20 @@ export async function convertRepository(options: ConvertOptions): Promise<void> 
     
     if (supabaseCreds && options.dbPassword) {
       logger.info('🔍 Attempting to introspect Supabase database schema...');
-      const dbUrl = buildSupabaseDatabaseUrl(supabaseCreds, options.dbPassword);
+      // Use direct connection (port 5432) - more reliable for Prisma introspection
+      const dbUrl = buildSupabaseDatabaseUrl(supabaseCreds, options.dbPassword, false);
+      logger.info(`Connecting to AWS EU North direct connection...`);
       
       // Use a temp directory for introspection (will be cleaned up)
       const tempIntrospectDir = path.join(targetDir, '.introspection-temp');
       const introspectionResult = await introspectSupabaseSchema(tempIntrospectDir, dbUrl);
       
-      // Clean up temp directory
-      await fs.remove(tempIntrospectDir);
+      // Clean up temp directory (with retry for Windows file locks)
+      try {
+        await fs.remove(tempIntrospectDir);
+      } catch {
+        // Ignore cleanup errors - temp dir will be deleted when project is cleaned up
+      }
       
       if (introspectionResult.success && introspectionResult.schemaContent) {
         const allModels = extractModelsFromSchema(introspectionResult.schemaContent);

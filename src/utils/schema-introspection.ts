@@ -85,12 +85,15 @@ export function buildSupabaseDatabaseUrl(
   pooler: boolean = true
 ): string {
   const projectRef = credentials.projectRef!;
+  // EU North is the correct region for this project
+  const region = 'aws-1-eu-north-1';
+  
   if (pooler) {
-    // Use connection pooler (recommended)
-    return `postgresql://postgres.${projectRef}:${password}@aws-0-us-east-1.pooler.supabase.com:5432/postgres`;
+    // Use connection pooler with pgbouncer (transaction mode, port 6543)
+    return `postgresql://postgres.${projectRef}:${password}@${region}.pooler.supabase.com:6543/postgres?pgbouncer=true`;
   } else {
-    // Direct connection
-    return `postgresql://postgres:${password}@db.${projectRef}.supabase.co:5432/postgres`;
+    // Direct connection (port 5432) - more reliable for introspection
+    return `postgresql://postgres.${projectRef}:${password}@${region}.pooler.supabase.com:5432/postgres`;
   }
 }
 
@@ -117,6 +120,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  schemas  = ["public", "auth", "storage"]
 }
 `;
     
@@ -136,6 +140,17 @@ datasource db {
       }
     };
     await fs.writeJson(path.join(tempDir, 'package.json'), packageJson, { spaces: 2 });
+    
+    // Install Prisma locally (silently)
+    try {
+      execSync('npm install --silent', {
+        cwd: tempDir,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 120000, // 2 minutes
+      });
+    } catch {
+      // If install fails, try to continue with global Prisma
+    }
     
     // Run prisma db pull
     const result = await runPrismaIntrospection(tempDir);
@@ -208,14 +223,23 @@ export function extractModelsFromSchema(schema: string): string[] {
   
   // Match all model blocks
   const modelRegex = /model\s+(\w+)\s*\{[\s\S]*?^\}/gm;
-  let match;
+  let match: RegExpExecArray | null;
   
   while ((match = modelRegex.exec(schema)) !== null) {
     const modelName = match[1];
+    const modelBlock = match[0];
+    
     // Skip our own base models
-    if (!['User', 'RefreshToken', 'FileStorage', 'Session'].includes(modelName)) {
-      models.push(match[0]);
+    if (['User', 'RefreshToken', 'FileStorage', 'Session'].includes(modelName)) {
+      continue;
     }
+    
+    // Skip if model is in auth or storage schema (check for @@schema attribute)
+    if (modelBlock.includes('@@schema("auth")') || modelBlock.includes('@@schema("storage")')) {
+      continue;
+    }
+    
+    models.push(modelBlock);
   }
   
   // Also extract enums

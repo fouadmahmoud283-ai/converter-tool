@@ -556,7 +556,7 @@ async function createStorageHooks(frontendDir: string, logger: Logger): Promise<
   await fs.ensureDir(hooksDir);
   
   const useStorage = `import { useState } from 'react';
-import { storage } from '../lib/api';
+import { storage } from '../../lib/api';
 
 interface FileInfo {
   id: string;
@@ -854,7 +854,7 @@ async function replaceSupabaseClient(frontendDir: string, logger: Logger): Promi
  * 
  * AUTO-GENERATED - DO NOT EDIT
  */
-import { auth, storage, invokeFn, apiRequest, getAccessToken, clearTokens } from '../lib/api';
+import { auth, storage, invokeFn, apiRequest, getAccessToken, clearTokens } from '../../lib/api';
 
 // Re-export the API client as 'supabase' for compatibility
 export const supabase = {

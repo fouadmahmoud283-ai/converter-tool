@@ -569,3 +569,335 @@ export function createModelRouter(
 }
 `;
 }
+
+/**
+ * Generate a dynamic REST API router that handles any table (PostgREST-compatible)
+ */
+export function generateDynamicRestApi(): string {
+  return `import { Router, Request, Response, NextFunction } from 'express';
+import prisma from '../lib/prisma.js';
+
+const router = Router();
+
+/**
+ * Convert camelCase to snake_case
+ */
+function toSnakeCase(str: string): string {
+  return str.replace(/[A-Z]/g, letter => \`_\${letter.toLowerCase()}\`);
+}
+
+/**
+ * Convert snake_case to camelCase (for Prisma model names)
+ */
+function toCamelCase(str: string): string {
+  return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
+}
+
+/**
+ * Get Prisma model by table name (handles both snake_case and camelCase)
+ */
+function getPrismaModel(tableName: string): any {
+  const camelCaseName = toCamelCase(tableName);
+  const model = (prisma as any)[camelCaseName] || (prisma as any)[tableName];
+  return model;
+}
+
+/**
+ * Parse query string filters from Supabase-style format
+ */
+function parseFilters(query: Record<string, any>): Record<string, any> {
+  const where: any = {};
+  
+  for (const [key, value] of Object.entries(query)) {
+    // Skip special params
+    if (key.startsWith('_') || key === 'select') continue;
+    
+    // Parse PostgREST-style operators
+    // Supabase format: column=eq.value, column=gt.value, etc.
+    const stringValue = String(value);
+    
+    // Check for operatorprefix
+    if (stringValue.includes('.')) {
+      const dotIndex = stringValue.indexOf('.');
+      const op = stringValue.substring(0, dotIndex);
+      const val = stringValue.substring(dotIndex + 1);
+      
+      switch (op) {
+        case 'eq': where[key] = val; break;
+        case 'neq': where[key] = { not: val }; break;
+        case 'gt': where[key] = { gt: isNaN(Number(val)) ? val : Number(val) }; break;
+        case 'gte': where[key] = { gte: isNaN(Number(val)) ? val : Number(val) }; break;
+        case 'lt': where[key] = { lt: isNaN(Number(val)) ? val : Number(val) }; break;
+        case 'lte': where[key] = { lte: isNaN(Number(val)) ? val : Number(val) }; break;
+        case 'like': where[key] = { contains: val.replace(/%/g, ''), mode: 'insensitive' }; break;
+        case 'ilike': where[key] = { contains: val.replace(/%/g, ''), mode: 'insensitive' }; break;
+        case 'is': where[key] = val === 'null' ? null : val; break;
+        case 'in': where[key] = { in: val.slice(1, -1).split(',') }; break;
+        case 'not':
+          // Handle not.eq, not.in, etc.
+          if (val.startsWith('eq.')) {
+            where[key] = { not: val.substring(3) };
+          } else if (val.startsWith('in.')) {
+            where[key] = { notIn: val.slice(4, -1).split(',') };
+          }
+          break;
+        default:
+          // Plain value
+          where[key] = value;
+      }
+    } else {
+      // Simple equality filter
+      where[key] = value;
+    }
+  }
+  
+  return where;
+}
+
+/**
+ * Parse select fields
+ */
+function parseSelect(selectParam: string | undefined): Record<string, boolean> | undefined {
+  if (!selectParam) return undefined;
+  
+  const fields = selectParam.split(',').map(f => f.trim());
+  const select: Record<string, boolean> = {};
+  
+  for (const field of fields) {
+    if (field && !field.includes('(')) { // Skip relation selects for now
+      select[toCamelCase(field)] = true;
+    }
+  }
+  
+  return Object.keys(select).length > 0 ? select : undefined;
+}
+
+/**
+ * Parse ordering
+ */
+function parseOrder(sortParam: string | undefined): any {
+  if (!sortParam) return undefined;
+  
+  const orders: any[] = [];
+  const parts = sortParam.split(',');
+  
+  for (const part of parts) {
+    const [field, direction] = part.split(':');
+    if (field) {
+      orders.push({ [toCamelCase(field.trim())]: direction?.toLowerCase() === 'desc' ? 'desc' : 'asc' });
+    }
+  }
+  
+  return orders.length > 0 ? orders : undefined;
+}
+
+// Dynamic REST API for any table
+// GET /api/:table - List/query records
+router.get('/:table', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { table } = req.params;
+    const model = getPrismaModel(table);
+    
+    if (!model) {
+      return res.status(404).json({ 
+        error: 'Not Found', 
+        message: \`Table "\${table}" not found. Available tables: \${Object.keys(prisma).filter(k => !k.startsWith('_') && !k.startsWith('$')).join(', ')}\`
+      });
+    }
+    
+    const where = parseFilters(req.query as Record<string, any>);
+    const select = parseSelect(req.query._select as string || req.query.select as string);
+    const orderBy = parseOrder(req.query._sort as string || req.query.order as string);
+    const limit = parseInt(req.query._limit as string || req.query.limit as string) || 100;
+    const offset = parseInt(req.query._offset as string || req.query.offset as string) || 0;
+    
+    const queryOptions: any = {
+      where,
+      take: limit,
+      skip: offset,
+    };
+    
+    if (select) queryOptions.select = select;
+    if (orderBy) queryOptions.orderBy = orderBy;
+    
+    const data = await model.findMany(queryOptions);
+    
+    // Get total count for headers
+    const total = await model.count({ where });
+    
+    res.setHeader('Content-Range', \`\${offset}-\${offset + data.length - 1}/\${total}\`);
+    res.setHeader('X-Total-Count', total.toString());
+    
+    res.json(data);
+  } catch (error: any) {
+    console.error('Database query error:', error);
+    next(error);
+  }
+});
+
+// GET /api/:table/:id - Get single record
+router.get('/:table/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { table, id } = req.params;
+    const model = getPrismaModel(table);
+    
+    if (!model) {
+      return res.status(404).json({ error: 'Not Found', message: \`Table "\${table}" not found\` });
+    }
+    
+    const item = await model.findUnique({ where: { id } });
+    
+    if (!item) {
+      return res.status(404).json({ error: 'Not Found', message: 'Record not found' });
+    }
+    
+    res.json(item);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/:table - Create record
+router.post('/:table', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { table } = req.params;
+    const model = getPrismaModel(table);
+    
+    if (!model) {
+      return res.status(404).json({ error: 'Not Found', message: \`Table "\${table}" not found\` });
+    }
+    
+    const item = await model.create({ data: req.body });
+    res.status(201).json(item);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// PATCH /api/:table/:id - Update record
+router.patch('/:table/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { table, id } = req.params;
+    const model = getPrismaModel(table);
+    
+    if (!model) {
+      return res.status(404).json({ error: 'Not Found', message: \`Table "\${table}" not found\` });
+    }
+    
+    const item = await model.update({
+      where: { id },
+      data: req.body,
+    });
+    
+    res.json(item);
+  } catch (error: any) {
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Not Found', message: 'Record not found' });
+    }
+    next(error);
+  }
+});
+
+// DELETE /api/:table/:id - Delete record
+router.delete('/:table/:id', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { table, id } = req.params;
+    const model = getPrismaModel(table);
+    
+    if (!model) {
+      return res.status(404).json({ error: 'Not Found', message: \`Table "\${table}" not found\` });
+    }
+    
+    await model.delete({ where: { id } });
+    res.status(204).send();
+  } catch (error: any) {
+    if (error.code === 'P2025') {
+      return res.status(404).json({ error: 'Not Found', message: 'Record not found' });
+    }
+    next(error);
+  }
+});
+
+export default router;
+`;
+}
+
+/**
+ * Generate RPC handler for Supabase-style RPC calls
+ */
+export function generateRpcHandler(): string {
+  return `import { Router, Request, Response, NextFunction } from 'express';
+import prisma from '../lib/prisma.js';
+
+const router = Router();
+
+// Map of RPC function names to their implementations
+// Add your custom RPC functions here
+const rpcFunctions: Record<string, (params: any, userId?: string) => Promise<any>> = {
+  // Example: is_system_admin checks if a user has system admin role
+  is_system_admin: async (params, userId) => {
+    if (!userId) return false;
+    
+    try {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        include: { role: true },
+      });
+      
+      return user?.role?.name === 'System Admin' || user?.role?.name === 'system_admin';
+    } catch {
+      return false;
+    }
+  },
+  
+  // Add more RPC functions as needed
+};
+
+// POST /rpc/:functionName - Call RPC function
+router.post('/:functionName', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { functionName } = req.params;
+    const func = rpcFunctions[functionName];
+    
+    if (!func) {
+      return res.status(404).json({ 
+        error: 'Not Found', 
+        message: \`RPC function "\${functionName}" not found. To add this function, edit src/routes/rpc.ts\`
+      });
+    }
+    
+    // Get user ID from auth if available
+    const userId = (req as any).user?.id;
+    
+    const result = await func(req.body, userId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /rpc/:functionName - Also support GET
+router.get('/:functionName', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { functionName } = req.params;
+    const func = rpcFunctions[functionName];
+    
+    if (!func) {
+      return res.status(404).json({ 
+        error: 'Not Found', 
+        message: \`RPC function "\${functionName}" not found\`
+      });
+    }
+    
+    const userId = (req as any).user?.id;
+    const result = await func(req.query, userId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;
+`;
+}
+

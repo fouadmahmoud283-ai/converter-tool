@@ -556,7 +556,7 @@ async function createStorageHooks(frontendDir: string, logger: Logger): Promise<
   await fs.ensureDir(hooksDir);
   
   const useStorage = `import { useState } from 'react';
-import { storage } from '../../lib/api';
+import { storage } from '../lib/api';
 
 interface FileInfo {
   id: string;

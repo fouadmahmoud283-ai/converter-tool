@@ -12,7 +12,7 @@ import { generateStreamingUtils, generateStreamingTypes } from './streaming.js';
 import { generateWebSocketSetup, generateWebSocketTypes } from './websocket.js';
 import { generateReadme } from './readme.js';
 import { generateAuthProxy, generateDatabaseProxy, generateStorageProxy } from './supabase-proxy.js';
-import { generatePrismaSchema, generatePrismaClient, generateDbUtils, generateCrudService, generateRestApiGenerator } from './prisma.js';
+import { generatePrismaSchema, generatePrismaClient, generateDbUtils, generateCrudService, generateRestApiGenerator, generateDynamicRestApi, generateRpcHandler } from './prisma.js';
 import { generateAuthService, generateSelfHostedAuthRoutes, generateSelfHostedAuthMiddleware } from './auth-selfhosted.js';
 import { generateStorageService, generateStorageRoutes } from './storage-selfhosted.js';
 
@@ -845,6 +845,20 @@ main()
     'utf8'
   );
 
+  // Write dynamic REST API routes (PostgREST-compatible)
+  await fs.writeFile(
+    path.join(backendDir, 'src', 'routes', 'api.ts'),
+    generateDynamicRestApi(),
+    'utf8'
+  );
+  
+  // Write RPC handler routes
+  await fs.writeFile(
+    path.join(backendDir, 'src', 'routes', 'rpc.ts'),
+    generateRpcHandler(),
+    'utf8'
+  );
+
   // Write adapter (Request/Response bridge)
   await writeAdapter(backendDir);
 
@@ -1008,6 +1022,8 @@ import routes from './routes/index.js';
 import { healthRouter } from './routes/health.js';
 import { authRouter } from './routes/auth.js';
 import { storageRouter } from './routes/storage.js';
+import apiRouter from './routes/api.js';
+import rpcRouter from './routes/rpc.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { setupGracefulShutdown } from './utils/shutdown.js';
@@ -1071,6 +1087,10 @@ app.use('/auth', authRouter);
 // Storage routes (file upload/download)
 app.use('/storage', storageRouter);
 
+// Database REST API (PostgREST-compatible)
+app.use('/api/rpc', rpcRouter);  // RPC functions first (more specific path)
+app.use('/api', apiRouter);       // Dynamic table REST API
+
 // Mount API routes (converted edge functions)
 const basePath = process.env.BASE_PATH ?? '/functions/v1';
 app.use(basePath, routes);
@@ -1088,6 +1108,8 @@ app.get('/', (req, res) => {
       auth: '/auth',
       storage: '/storage',
       functions: basePath,
+      database: '/api',
+      rpc: '/api/rpc',
       health: '/health',
     },
   });
@@ -1108,6 +1130,7 @@ const server = app.listen(port, () => {
 🚀 Self-Hosted Express server running!
    Local:    http://localhost:\${port}
    API:      http://localhost:\${port}\${basePath}
+   Database: http://localhost:\${port}/api
    Auth:     http://localhost:\${port}/auth
    Storage:  http://localhost:\${port}/storage
    Health:   http://localhost:\${port}/health${config.swagger ? '\n   Docs:     http://localhost:${port}/api-docs' : ''}

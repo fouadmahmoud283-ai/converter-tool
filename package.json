@@ -1,0 +1,29 @@
+{
+  "name": "deno-express-converter",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "CLI tool to convert Supabase Deno Edge Functions into an Express.js server.",
+  "bin": {
+    "deno-express-converter": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "commander": "^12.0.0",
+    "fast-glob": "^3.3.2",
+    "fs-extra": "^11.2.0",
+    "jscodeshift": "^0.15.2",
+    "kleur": "^4.1.5",
+    "open": "^10.2.0",
+    "simple-git": "^3.27.0"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^20.11.10",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.5"
+  }
+}

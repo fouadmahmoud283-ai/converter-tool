@@ -1,0 +1,604 @@
+import { spawn, ChildProcess, execSync } from 'node:child_process';
+import path from 'node:path';
+import fs from 'fs-extra';
+import { Logger } from './logger.js';
+import open from 'open';
+
+export interface AutoRunOptions {
+  backendDir: string;
+  frontendDir: string | null;
+  projectDir: string;
+  logger: Logger;
+  backendPort?: number;
+  frontendPort?: number;
+}
+
+export interface SelfHostedAutoRunOptions extends AutoRunOptions {
+  storageProvider?: 'local' | 'minio' | 'both';
+}
+
+/**
+ * Copy .env from original project to backend
+ */
+export async function copyEnvFile(
+  projectDir: string,
+  backendDir: string,
+  logger: Logger
+): Promise<boolean> {
+  // Look for .env file in project root
+  const possibleEnvPaths = [
+    path.join(projectDir, '.env'),
+    path.join(projectDir, '.env.local'),
+    path.join(projectDir, '.env.development'),
+  ];
+
+  for (const envPath of possibleEnvPaths) {
+    if (await fs.pathExists(envPath)) {
+      const envContent = await fs.readFile(envPath, 'utf8');
+      const backendEnvPath = path.join(backendDir, '.env');
+      
+      // Convert VITE_ prefixed vars to backend format and add backend-specific vars
+      let convertedEnv = envContent;
+      
+      // Extract Supabase credentials with both naming conventions
+      const urlMatch = envContent.match(/VITE_SUPABASE_URL=["']?([^"'\n]+)["']?/);
+      const keyMatch = envContent.match(/VITE_SUPABASE_(?:ANON_KEY|PUBLISHABLE_KEY)=["']?([^"'\n]+)["']?/);
+      
+      const backendEnv = `# Backend Environment Variables
+# Copied from original project and enhanced for Express backend
+
+PORT=3001
+NODE_ENV=development
+CORS_ORIGIN=http://localhost:5173,http://localhost:8080
+
+# Supabase Configuration (converted from VITE_ format)
+${urlMatch ? `SUPABASE_URL=${urlMatch[1]}` : '# SUPABASE_URL=your-supabase-url'}
+${keyMatch ? `SUPABASE_ANON_KEY=${keyMatch[1]}` : '# SUPABASE_ANON_KEY=your-anon-key'}
+
+# Original env variables from project
+${envContent}
+`;
+      
+      await fs.writeFile(backendEnvPath, backendEnv, 'utf8');
+      logger.success(`Copied environment variables from ${path.basename(envPath)}`);
+      return true;
+    }
+  }
+
+  logger.warn('No .env file found in project, using .env.example');
+  
+  // Fallback to .env.example
+  const examplePath = path.join(backendDir, '.env.example');
+  const envPath = path.join(backendDir, '.env');
+  
+  if (await fs.pathExists(examplePath)) {
+    await fs.copy(examplePath, envPath);
+    logger.info('Created .env from .env.example - please fill in missing values');
+  }
+  
+  return false;
+}
+
+/**
+ * Run npm install in a directory
+ */
+export async function runNpmInstall(
+  directory: string,
+  logger: Logger,
+  name: string = 'project'
+): Promise<boolean> {
+  logger.info(`Installing ${name} dependencies...`);
+  
+  return new Promise((resolve) => {
+    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const child = spawn(npmCmd, ['install'], {
+      cwd: directory,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: true,
+    });
+
+    let output = '';
+    
+    child.stdout?.on('data', (data) => {
+      output += data.toString();
+    });
+    
+    child.stderr?.on('data', (data) => {
+      output += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        logger.success(`${name} dependencies installed successfully`);
+        resolve(true);
+      } else {
+        logger.error(`Failed to install ${name} dependencies`);
+        logger.debug(output);
+        resolve(false);
+      }
+    });
+
+    child.on('error', (err) => {
+      logger.error(`npm install error: ${err.message}`);
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * Start a dev server in a directory
+ */
+export function startDevServer(
+  directory: string,
+  name: string,
+  logger: Logger
+): ChildProcess {
+  logger.info(`Starting ${name} server...`);
+  
+  const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const child = spawn(npmCmd, ['run', 'dev'], {
+    cwd: directory,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: true,
+    detached: false,
+  });
+
+  child.stdout?.on('data', (data) => {
+    const line = data.toString().trim();
+    if (line) {
+      // Detect server ready messages
+      if (line.includes('localhost') || line.includes('ready') || line.includes('running')) {
+        logger.success(`${name}: ${line}`);
+      } else {
+        logger.debug(`${name}: ${line}`);
+      }
+    }
+  });
+
+  child.stderr?.on('data', (data) => {
+    const line = data.toString().trim();
+    if (line && !line.includes('ExperimentalWarning')) {
+      logger.warn(`${name}: ${line}`);
+    }
+  });
+
+  child.on('error', (err) => {
+    logger.error(`${name} server error: ${err.message}`);
+  });
+
+  return child;
+}
+
+/**
+ * Wait for a server to be ready
+ */
+export async function waitForServer(
+  url: string,
+  timeout: number = 30000,
+  logger: Logger
+): Promise<boolean> {
+  const startTime = Date.now();
+  
+  while (Date.now() - startTime < timeout) {
+    try {
+      const response = await fetch(url, { 
+        method: 'GET',
+        signal: AbortSignal.timeout(2000)
+      });
+      if (response.ok) {
+        return true;
+      }
+    } catch {
+      // Server not ready yet
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  
+  logger.warn(`Timeout waiting for ${url}`);
+  return false;
+}
+
+/**
+ * Run the full auto-setup process
+ */
+export async function autoSetupAndRun(options: AutoRunOptions): Promise<void> {
+  const { backendDir, frontendDir, projectDir, logger } = options;
+  const backendPort = options.backendPort ?? 3001;
+  const frontendPort = options.frontendPort ?? 8080;
+  
+  const processes: ChildProcess[] = [];
+  
+  // Setup cleanup on exit
+  const cleanup = () => {
+    logger.info('\nShutting down servers...');
+    for (const proc of processes) {
+      if (!proc.killed) {
+        proc.kill();
+      }
+    }
+  };
+  
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+
+  try {
+    // 1. Copy .env file
+    await copyEnvFile(projectDir, backendDir, logger);
+
+    // 2. Install backend dependencies
+    const backendInstalled = await runNpmInstall(backendDir, logger, 'backend');
+    if (!backendInstalled) {
+      logger.error('Backend installation failed. Please run npm install manually.');
+      return;
+    }
+
+    // 3. Install frontend dependencies if needed
+    if (frontendDir) {
+      const hasNodeModules = await fs.pathExists(path.join(frontendDir, 'node_modules'));
+      if (!hasNodeModules) {
+        const frontendInstalled = await runNpmInstall(frontendDir, logger, 'frontend');
+        if (!frontendInstalled) {
+          logger.warn('Frontend installation failed. Continuing with backend only.');
+        }
+      }
+    }
+
+    // 4. Start backend server
+    logger.info('\n🚀 Starting development servers...\n');
+    const backendProcess = startDevServer(backendDir, 'Backend', logger);
+    processes.push(backendProcess);
+
+    // 5. Start frontend server if present
+    let frontendProcess: ChildProcess | null = null;
+    if (frontendDir) {
+      // Wait a moment for backend to initialize
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      frontendProcess = startDevServer(frontendDir, 'Frontend', logger);
+      processes.push(frontendProcess);
+    }
+
+    // 6. Wait for servers to be ready
+    logger.info('\nWaiting for servers to be ready...');
+    
+    const backendUrl = `http://localhost:${backendPort}`;
+    const frontendUrl = frontendDir ? `http://localhost:${frontendPort}` : null;
+    
+    const backendReady = await waitForServer(backendUrl, 30000, logger);
+    
+    if (backendReady) {
+      logger.success(`\n✅ Backend ready at: ${backendUrl}`);
+      logger.success(`   API docs at: ${backendUrl}/api-docs`);
+    }
+
+    if (frontendUrl) {
+      const frontendReady = await waitForServer(frontendUrl, 45000, logger);
+      if (frontendReady) {
+        logger.success(`✅ Frontend ready at: ${frontendUrl}`);
+      }
+    }
+
+    // 7. Open browser
+    const urlToOpen = frontendUrl || backendUrl;
+    logger.info(`\n🌐 Opening browser to ${urlToOpen}...\n`);
+    
+    await open(urlToOpen);
+
+    // Keep running until interrupted
+    logger.info('Press Ctrl+C to stop all servers\n');
+    
+    // Keep process alive
+    await new Promise(() => {});
+
+  } catch (error) {
+    logger.error(`Auto-run error: ${error instanceof Error ? error.message : error}`);
+    cleanup();
+  }
+}
+
+/**
+ * Run a command and wait for it to complete
+ */
+export function runCommand(
+  command: string,
+  args: string[],
+  cwd: string,
+  logger: Logger,
+  description: string
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    logger.info(`${description}...`);
+    
+    const child = spawn(command, args, {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: true,
+    });
+
+    let output = '';
+    
+    child.stdout?.on('data', (data) => {
+      output += data.toString();
+      const lines = data.toString().trim().split('\n');
+      for (const line of lines) {
+        if (line.trim()) {
+          logger.debug(line.trim());
+        }
+      }
+    });
+    
+    child.stderr?.on('data', (data) => {
+      output += data.toString();
+    });
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        logger.success(`✓ ${description} completed`);
+        resolve(true);
+      } else {
+        logger.error(`✗ ${description} failed`);
+        logger.debug(output);
+        resolve(false);
+      }
+    });
+
+    child.on('error', (err) => {
+      logger.error(`Command error: ${err.message}`);
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * Check if Docker is running
+ */
+export async function isDockerRunning(logger: Logger): Promise<boolean> {
+  return new Promise((resolve) => {
+    const dockerCmd = process.platform === 'win32' ? 'docker' : 'docker';
+    const child = spawn(dockerCmd, ['info'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: true,
+    });
+    
+    child.on('close', (code) => {
+      resolve(code === 0);
+    });
+    
+    child.on('error', () => {
+      resolve(false);
+    });
+  });
+}
+
+/**
+ * Wait for PostgreSQL container to be healthy
+ */
+export async function waitForPostgres(
+  logger: Logger,
+  containerName: string = 'echo_change_db',
+  timeout: number = 60000
+): Promise<boolean> {
+  const startTime = Date.now();
+  const dockerCmd = process.platform === 'win32' ? 'docker' : 'docker';
+  
+  logger.info('Waiting for PostgreSQL to be ready...');
+  
+  while (Date.now() - startTime < timeout) {
+    try {
+      const result = execSync(
+        `${dockerCmd} exec ${containerName} pg_isready -U postgres`,
+        { stdio: 'pipe' }
+      ).toString();
+      
+      if (result.includes('accepting connections')) {
+        logger.success('✓ PostgreSQL is ready');
+        return true;
+      }
+    } catch {
+      // Not ready yet
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  
+  logger.warn('Timeout waiting for PostgreSQL');
+  return false;
+}
+
+/**
+ * Run the full auto-setup process for self-hosted mode
+ */
+export async function autoSetupSelfHosted(options: SelfHostedAutoRunOptions): Promise<void> {
+  const { backendDir, frontendDir, projectDir, logger, storageProvider } = options;
+  const backendPort = options.backendPort ?? 3001;
+  const frontendPort = options.frontendPort ?? 5173;
+  
+  const processes: ChildProcess[] = [];
+  const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const dockerCmd = process.platform === 'win32' ? 'docker-compose' : 'docker-compose';
+  
+  // Setup cleanup on exit
+  const cleanup = () => {
+    logger.info('\nShutting down servers...');
+    for (const proc of processes) {
+      if (!proc.killed) {
+        proc.kill();
+      }
+    }
+  };
+  
+  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', cleanup);
+
+  try {
+    logger.info('\n🚀 Starting self-hosted setup...\n');
+
+    // 1. Check if Docker is running
+    const dockerRunning = await isDockerRunning(logger);
+    if (!dockerRunning) {
+      logger.error('Docker is not running. Please start Docker Desktop and try again.');
+      logger.info('\nManual setup steps:');
+      logger.info('  1. Start Docker Desktop');
+      logger.info(`  2. cd ${backendDir}`);
+      logger.info('  3. docker-compose up -d');
+      logger.info('  4. npm install');
+      logger.info('  5. npm run db:generate');
+      logger.info('  6. npm run db:migrate');
+      logger.info('  7. npm run dev');
+      return;
+    }
+
+    // 2. Start Docker containers
+    logger.info('📦 Starting Docker containers...');
+    const dockerUp = await runCommand(
+      dockerCmd,
+      ['up', '-d'],
+      backendDir,
+      logger,
+      'Starting PostgreSQL' + (storageProvider !== 'local' ? ' + MinIO' : '')
+    );
+    
+    if (!dockerUp) {
+      logger.error('Failed to start Docker containers');
+      return;
+    }
+
+    // 3. Wait for PostgreSQL to be healthy
+    // Get container name from docker-compose
+    const containerName = await getPostgresContainerName(backendDir, logger);
+    const pgReady = await waitForPostgres(logger, containerName, 60000);
+    
+    if (!pgReady) {
+      logger.warn('PostgreSQL may not be ready. Continuing anyway...');
+    }
+
+    // 4. Install backend dependencies
+    const backendInstalled = await runNpmInstall(backendDir, logger, 'backend');
+    if (!backendInstalled) {
+      logger.error('Backend installation failed.');
+      return;
+    }
+
+    // 5. Generate Prisma client
+    const prismaGenerate = await runCommand(
+      npmCmd,
+      ['run', 'db:generate'],
+      backendDir,
+      logger,
+      'Generating Prisma client'
+    );
+    
+    if (!prismaGenerate) {
+      logger.warn('Prisma generate failed. Trying direct command...');
+    }
+
+    // 6. Run Prisma migrations
+    logger.info('Running database migrations...');
+    const prismaMigrate = await runCommand(
+      npmCmd,
+      ['run', 'db:push'],  // Use db:push for simpler setup (no migration files needed)
+      backendDir,
+      logger,
+      'Applying database schema'
+    );
+    
+    if (!prismaMigrate) {
+      logger.warn('Database schema push failed. You may need to run manually: npm run db:push');
+    }
+
+    // 7. Install frontend dependencies if present
+    if (frontendDir) {
+      const hasNodeModules = await fs.pathExists(path.join(frontendDir, 'node_modules'));
+      if (!hasNodeModules) {
+        await runNpmInstall(frontendDir, logger, 'frontend');
+      }
+    }
+
+    // 8. Start backend server
+    logger.info('\n🚀 Starting development servers...\n');
+    const backendProcess = startDevServer(backendDir, 'Backend', logger);
+    processes.push(backendProcess);
+
+    // 9. Start frontend server if present
+    if (frontendDir) {
+      // Wait for backend to initialize
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      const frontendProcess = startDevServer(frontendDir, 'Frontend', logger);
+      processes.push(frontendProcess);
+    }
+
+    // 10. Wait for servers to be ready
+    logger.info('\nWaiting for servers to be ready...');
+    
+    const backendUrl = `http://localhost:${backendPort}`;
+    const frontendUrl = frontendDir ? `http://localhost:${frontendPort}` : null;
+    
+    const backendReady = await waitForServer(backendUrl, 45000, logger);
+    
+    if (backendReady) {
+      logger.success(`\n✅ Backend ready at: ${backendUrl}`);
+      logger.success(`   API docs at: ${backendUrl}/api-docs`);
+      logger.success(`   Health check: ${backendUrl}/health`);
+    }
+
+    if (frontendUrl) {
+      const frontendReady = await waitForServer(frontendUrl, 60000, logger);
+      if (frontendReady) {
+        logger.success(`✅ Frontend ready at: ${frontendUrl}`);
+      }
+    }
+
+    // 11. Open browser
+    const urlToOpen = frontendUrl || backendUrl;
+    logger.info(`\n🌐 Opening browser to ${urlToOpen}...\n`);
+    
+    try {
+      await open(urlToOpen);
+    } catch {
+      logger.info(`Please open ${urlToOpen} in your browser`);
+    }
+
+    // Show summary
+    logger.info('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    logger.info('🏠 Self-Hosted Backend Running:');
+    logger.info(`   Backend API:     ${backendUrl}`);
+    logger.info(`   API Docs:        ${backendUrl}/api-docs`);
+    if (frontendUrl) {
+      logger.info(`   Frontend:        ${frontendUrl}`);
+    }
+    logger.info('');
+    logger.info('📦 Docker Services:');
+    logger.info('   PostgreSQL:      localhost:5432');
+    if (storageProvider === 'minio' || storageProvider === 'both') {
+      logger.info('   MinIO API:       localhost:9000');
+      logger.info('   MinIO Console:   localhost:9001');
+    }
+    logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    logger.info('\nPress Ctrl+C to stop all servers\n');
+    
+    // Keep running until interrupted
+    await new Promise(() => {});
+
+  } catch (error) {
+    logger.error(`Auto-run error: ${error instanceof Error ? error.message : error}`);
+    cleanup();
+  }
+}
+
+/**
+ * Get PostgreSQL container name from docker-compose
+ */
+async function getPostgresContainerName(backendDir: string, logger: Logger): Promise<string> {
+  try {
+    const dockerComposePath = path.join(backendDir, 'docker-compose.yml');
+    const content = await fs.readFile(dockerComposePath, 'utf8');
+    
+    // Try to find container_name for postgres service
+    const match = content.match(/postgres[\s\S]*?container_name:\s*(\S+)/);
+    if (match) {
+      return match[1];
+    }
+  } catch {
+    // Fallback to default
+  }
+  
+  return 'echo_change_db';
+}

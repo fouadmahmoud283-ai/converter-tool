@@ -1072,12 +1072,51 @@ function createQueryBuilder(table: string) {
       return builder;
     },
     
-    insert: async (data: any) => {
-      const { data: result, error } = await apiRequest(\`/api/\${query._table}\`, {
-        method: 'POST',
-        body: JSON.stringify(data),
-      });
-      return { data: result, error };
+    insert: (data: any) => {
+      query._insertData = data;
+      // Return a chainable object that supports .select()
+      const insertBuilder = {
+        select: (columns = '*') => {
+          query._insertSelect = columns;
+          return insertBuilder;
+        },
+        single: () => {
+          query._single = true;
+          return insertBuilder;
+        },
+        then: async (resolve: Function) => {
+          const { data: result, error } = await apiRequest(\`/api/\${query._table}\`, {
+            method: 'POST',
+            body: JSON.stringify(query._insertData),
+          });
+          // If select was called, return the full record
+          resolve({ data: query._single ? result : (Array.isArray(result) ? result : [result]), error });
+        },
+      };
+      return insertBuilder;
+    },
+    
+    upsert: (data: any) => {
+      query._upsertData = data;
+      const upsertBuilder = {
+        select: (columns = '*') => {
+          query._upsertSelect = columns;
+          return upsertBuilder;
+        },
+        single: () => {
+          query._single = true;
+          return upsertBuilder;
+        },
+        then: async (resolve: Function) => {
+          // For upsert, try to update first, then insert if not found
+          const { data: result, error } = await apiRequest(\`/api/\${query._table}\`, {
+            method: 'POST',
+            body: JSON.stringify(query._upsertData),
+          });
+          resolve({ data: query._single ? result : (Array.isArray(result) ? result : [result]), error });
+        },
+      };
+      return upsertBuilder;
     },
     
     update: (data: any) => {

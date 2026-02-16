@@ -172,6 +172,25 @@ export async function signUp(
     },
   });
   
+  // Auto-create profile if the profiles table exists (for Supabase-migrated schemas)
+  // This ensures FK constraints on tables referencing profiles.id work correctly
+  try {
+    if ((prisma as any).profiles) {
+      await (prisma as any).profiles.create({
+        data: {
+          id: user.id,
+          email: user.email,
+          full_name: metadata?.fullName || null,
+          created_at: new Date(),
+          updated_at: new Date(),
+        },
+      });
+    }
+  } catch (profileError) {
+    // Profile creation is optional - log but don't fail signup
+    console.warn('Could not create profile (may already exist or table structure differs):', profileError);
+  }
+  
   // Generate tokens
   const tokens = generateTokens(user.id, user.email);
   

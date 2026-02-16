@@ -805,7 +805,20 @@ router.post('/:table', async (req: Request, res: Response, next: NextFunction) =
     }
     
     // Convert date strings to ISO-8601 DateTime format
-    const data = convertDates(req.body);
+    let data = convertDates(req.body);
+    
+    // Auto-fill user reference fields with authenticated user's ID
+    // This handles FK constraints for user-owned records
+    const userId = (req as any).user?.userId || (req as any).user?.id;
+    if (userId) {
+      const userFields = ['created_by', 'user_id', 'author_id', 'owner_id', 'createdBy', 'userId', 'authorId', 'ownerId'];
+      for (const field of userFields) {
+        if (data[field] !== undefined) {
+          // Override with authenticated user's ID to ensure FK constraint is met
+          data[field] = userId;
+        }
+      }
+    }
     
     const item = await model.create({ data });
     res.status(201).json(item);

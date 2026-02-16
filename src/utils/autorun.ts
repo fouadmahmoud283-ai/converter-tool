@@ -364,6 +364,7 @@ export function runCommand(
     });
 
     let output = '';
+    let errorOutput = '';
     
     child.stdout?.on('data', (data) => {
       output += data.toString();
@@ -376,7 +377,9 @@ export function runCommand(
     });
     
     child.stderr?.on('data', (data) => {
-      output += data.toString();
+      const err = data.toString();
+      errorOutput += err;
+      output += err;
     });
 
     child.on('close', (code) => {
@@ -385,6 +388,9 @@ export function runCommand(
         resolve(true);
       } else {
         logger.error(`✗ ${description} failed`);
+        if (errorOutput) {
+          logger.error(`Error: ${errorOutput.trim()}`);
+        }
         logger.debug(output);
         resolve(false);
       }
@@ -462,7 +468,8 @@ export async function autoSetupSelfHosted(options: SelfHostedAutoRunOptions): Pr
   
   const processes: ChildProcess[] = [];
   const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const dockerCmd = process.platform === 'win32' ? 'docker-compose' : 'docker-compose';
+  // Try modern docker compose first (plugin), fallback to old docker-compose
+  const dockerCmd = 'docker';
   
   // Setup cleanup on exit
   const cleanup = () => {
@@ -502,7 +509,7 @@ export async function autoSetupSelfHosted(options: SelfHostedAutoRunOptions): Pr
     logger.info('📦 Starting Docker containers...');
     const dockerUp = await runCommand(
       dockerCmd,
-      ['up', '-d'],
+      ['compose', 'up', '-d'],
       backendDir,
       logger,
       'Starting PostgreSQL' + (storageProvider !== 'local' ? ' + MinIO' : '')
@@ -510,6 +517,9 @@ export async function autoSetupSelfHosted(options: SelfHostedAutoRunOptions): Pr
     
     if (!dockerUp) {
       logger.error('Failed to start Docker containers');
+      logger.info('\nTry manually:');
+      logger.info(`  cd ${backendDir}`);
+      logger.info('  docker compose up -d');
       return;
     }
 

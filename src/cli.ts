@@ -206,6 +206,8 @@ program
         dryRun: options.dryRun,
         autoRun: options.autoRun,
         config: { selfHosted: selfHostedConfig },
+        dbPassword: options.dbPassword || process.env.SUPABASE_DB_PASSWORD,
+        skipIntrospection: false,
       });
     } else if (!repoUrl) {
       program.help();

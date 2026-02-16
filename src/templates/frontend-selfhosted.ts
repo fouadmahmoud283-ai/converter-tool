@@ -991,6 +991,68 @@ export const supabase = {
       body: JSON.stringify(params || {}),
     });
   },
+  
+  /**
+   * Mock realtime channel API
+   * Self-hosted mode doesn't support realtime subscriptions by default.
+   * This provides a no-op implementation to prevent runtime errors.
+   */
+  channel: (name: string) => {
+    console.warn(\`[Self-Hosted] Realtime channels not supported. Channel "\${name}" will be a no-op.\`);
+    
+    const channelInstance: any = {
+      _name: name,
+      _callbacks: new Map<string, Function[]>(),
+      
+      on: (event: string, opts: any, callback?: Function) => {
+        // Support both (event, callback) and (event, filter, callback) signatures
+        const cb = typeof opts === 'function' ? opts : callback;
+        if (cb) {
+          const callbacks = channelInstance._callbacks.get(event) || [];
+          callbacks.push(cb);
+          channelInstance._callbacks.set(event, callbacks);
+        }
+        return channelInstance;
+      },
+      
+      subscribe: (callback?: (status: string, err?: any) => void) => {
+        // Simulate successful subscription
+        if (callback) {
+          setTimeout(() => callback('SUBSCRIBED'), 0);
+        }
+        return channelInstance;
+      },
+      
+      unsubscribe: () => {
+        channelInstance._callbacks.clear();
+        return Promise.resolve();
+      },
+      
+      send: (payload: { type: string; event: string; payload: any }) => {
+        console.warn('[Self-Hosted] Realtime broadcast not supported:', payload);
+        return Promise.resolve();
+      },
+    };
+    
+    return channelInstance;
+  },
+  
+  /**
+   * Remove a channel subscription
+   */
+  removeChannel: (channel: any) => {
+    if (channel && typeof channel.unsubscribe === 'function') {
+      return channel.unsubscribe();
+    }
+    return Promise.resolve();
+  },
+  
+  /**
+   * Remove all channel subscriptions
+   */
+  removeAllChannels: () => {
+    return Promise.resolve();
+  },
 };
 
 // Query builder that mimics Supabase's interface

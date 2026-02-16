@@ -580,14 +580,7 @@ import prisma from '../lib/prisma.js';
 const router = Router();
 
 /**
- * Convert camelCase to snake_case
- */
-function toSnakeCase(str: string): string {
-  return str.replace(/[A-Z]/g, letter => \`_\${letter.toLowerCase()}\`);
-}
-
-/**
- * Convert snake_case to camelCase (for Prisma model names)
+ * Convert snake_case to camelCase (for Prisma model names only)
  */
 function toCamelCase(str: string): string {
   return str.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase());
@@ -604,13 +597,14 @@ function getPrismaModel(tableName: string): any {
 
 /**
  * Parse query string filters from Supabase-style format
+ * Field names are kept as-is (don't convert to camelCase)
  */
 function parseFilters(query: Record<string, any>): Record<string, any> {
   const where: any = {};
   
   for (const [key, value] of Object.entries(query)) {
     // Skip special params
-    if (key.startsWith('_') || key === 'select') continue;
+    if (key.startsWith('_') || key === 'select' || key === 'order') continue;
     
     // Parse PostgREST-style operators
     // Supabase format: column=eq.value, column=gt.value, etc.
@@ -646,7 +640,7 @@ function parseFilters(query: Record<string, any>): Record<string, any> {
           where[key] = value;
       }
     } else {
-      // Simple equality filter
+      // Simple equality filter (no conversion needed)
       where[key] = value;
     }
   }
@@ -655,7 +649,7 @@ function parseFilters(query: Record<string, any>): Record<string, any> {
 }
 
 /**
- * Parse select fields
+ * Parse select fields - keep field names as-is
  */
 function parseSelect(selectParam: string | undefined): Record<string, boolean> | undefined {
   if (!selectParam) return undefined;
@@ -665,7 +659,8 @@ function parseSelect(selectParam: string | undefined): Record<string, boolean> |
   
   for (const field of fields) {
     if (field && !field.includes('(')) { // Skip relation selects for now
-      select[toCamelCase(field)] = true;
+      // Keep field name as-is (don't convert)
+      select[field] = true;
     }
   }
   
@@ -673,7 +668,7 @@ function parseSelect(selectParam: string | undefined): Record<string, boolean> |
 }
 
 /**
- * Parse ordering
+ * Parse ordering - keep field names as-is
  */
 function parseOrder(sortParam: string | undefined): any {
   if (!sortParam) return undefined;
@@ -684,7 +679,8 @@ function parseOrder(sortParam: string | undefined): any {
   for (const part of parts) {
     const [field, direction] = part.split(':');
     if (field) {
-      orders.push({ [toCamelCase(field.trim())]: direction?.toLowerCase() === 'desc' ? 'desc' : 'asc' });
+      // Keep field name as-is (don't convert to camelCase)
+      orders.push({ [field.trim()]: direction?.toLowerCase() === 'desc' ? 'desc' : 'asc' });
     }
   }
   

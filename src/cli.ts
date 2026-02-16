@@ -32,6 +32,9 @@ program
   .option('--storage <provider>', 'Storage provider: local, minio, or both (default: local)', 'local')
   .option('--minio-bucket <name>', 'MinIO default bucket name', 'files')
   .option('--db-name <name>', 'PostgreSQL database name', 'app')
+  // Schema introspection
+  .option('--db-password <password>', 'Supabase database password for schema introspection')
+  .option('--skip-introspection', 'Skip Supabase schema introspection', false)
   .action(async (repoUrl, options) => {
     try {
       console.log(kleur.bold().cyan('\n🔄 Deno → Express Converter (Full Migration)\n'));
@@ -106,6 +109,8 @@ program
         dryRun: options.dryRun,
         config,
         autoRun: options.autoRun,
+        dbPassword: options.dbPassword || process.env.SUPABASE_DB_PASSWORD,
+        skipIntrospection: options.skipIntrospection,
       });
     } catch (error) {
       console.error(kleur.red(`\n✖ Error: ${error instanceof Error ? error.message : error}`));
@@ -157,6 +162,7 @@ program
   .option('-v, --verbose', 'Enable verbose logging', false)
   .option('--dry-run', 'Analyze without changes', false)
   .option('--storage <provider>', 'Storage provider: local, minio, or both', 'local')
+  .option('--db-password <password>', 'Supabase database password for schema introspection')
   .action(async (repoUrl, options) => {
     if (repoUrl && repoUrl.startsWith('http')) {
       console.log(kleur.yellow('Tip: Use "convert" command: deno-express-converter convert <url>\n'));

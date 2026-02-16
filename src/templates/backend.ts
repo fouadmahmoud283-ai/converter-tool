@@ -19,6 +19,7 @@ import { generateStorageService, generateStorageRoutes } from './storage-selfhos
 export type BackendOptions = {
   config?: Partial<ConverterConfig>;
   functionNames?: string[];
+  additionalModels?: string[]; // Introspected models from Supabase
 };
 
 export async function writeBackendScaffold(
@@ -619,6 +620,19 @@ export async function writeSelfHostedBackendScaffold(
   const config = { ...defaultConfig, ...options.config };
   const selfHosted = config.selfHosted || { enabled: true };
   const functionNames = options.functionNames ?? [];
+  const additionalModels = options.additionalModels ?? [];
+  
+  // Build additional models string for Prisma schema
+  let additionalModelsString = '';
+  if (additionalModels.length > 0) {
+    additionalModelsString = `
+// ============================================
+// Application Models (Imported from Supabase)
+// ============================================
+
+${additionalModels.join('\n\n')}
+`;
+  }
   
   await fs.ensureDir(backendDir);
 
@@ -753,7 +767,7 @@ export async function writeSelfHostedBackendScaffold(
   // Write Prisma files
   await fs.writeFile(
     path.join(backendDir, 'prisma', 'schema.prisma'),
-    generatePrismaSchema({ config: selfHosted }),
+    generatePrismaSchema({ config: selfHosted, additionalModels: additionalModelsString }),
     'utf8'
   );
   await fs.writeFile(

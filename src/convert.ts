@@ -15,6 +15,15 @@ import { extractEnvVariables } from './utils/env.js';
 import { Logger } from './utils/logger.js';
 import { ConverterConfig, defaultConfig } from './config.js';
 import { autoSetupAndRun, autoSetupSelfHosted } from './utils/autorun.js';
+import {
+  extractSupabaseCredentials,
+  buildSupabaseDatabaseUrl,
+  introspectSupabaseSchema,
+  extractModelsFromSchema,
+  filterSupabaseInternalTables,
+  mergeWithBaseModels,
+  getIntrospectionInstructions
+} from './utils/schema-introspection.js';
 
 const require = createRequire(import.meta.url);
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -29,6 +38,8 @@ export type ConvertOptions = {
   dryRun?: boolean;
   config?: Partial<ConverterConfig>;
   autoRun?: boolean; // Auto install deps and start servers
+  dbPassword?: string; // Supabase database password for schema introspection
+  skipIntrospection?: boolean; // Skip Supabase schema introspection
 };
 
 export type FunctionInfo = {
@@ -94,11 +105,51 @@ export async function convertRepository(options: ConvertOptions): Promise<void> 
   // Create backend directory
   const backendDir = path.join(targetDir, config.outputDir ?? 'backend');
   
+  // Schema introspection
+  let introspectedModels: string[] = [];
+  
+  if (!options.skipIntrospection) {
+    const supabaseCreds = await extractSupabaseCredentials(targetDir);
+    
+    if (supabaseCreds && options.dbPassword) {
+      logger.info('🔍 Attempting to introspect Supabase database schema...');
+      const dbUrl = buildSupabaseDatabaseUrl(supabaseCreds, options.dbPassword);
+      
+      // Use a temp directory for introspection (will be cleaned up)
+      const tempIntrospectDir = path.join(targetDir, '.introspection-temp');
+      const introspectionResult = await introspectSupabaseSchema(tempIntrospectDir, dbUrl);
+      
+      // Clean up temp directory
+      await fs.remove(tempIntrospectDir);
+      
+      if (introspectionResult.success && introspectionResult.schemaContent) {
+        const allModels = extractModelsFromSchema(introspectionResult.schemaContent);
+        introspectedModels = filterSupabaseInternalTables(allModels);
+        
+        // Extract model names for logging
+        const modelNames = introspectedModels.map(m => {
+          const match = m.match(/model\s+(\w+)/);
+          return match ? match[1] : 'Unknown';
+        });
+        logger.success(`✅ Introspected ${introspectedModels.length} database model(s): ${modelNames.join(', ')}`);
+      } else if (introspectionResult.error) {
+        logger.warn(`⚠️ Schema introspection failed: ${introspectionResult.error}`);
+        logger.info('Proceeding with base models only. You can add models manually later.');
+      }
+    } else if (supabaseCreds && !options.dbPassword) {
+      // Supabase credentials found but no password provided
+      logger.info('');
+      logger.info('💡 ' + getIntrospectionInstructions(supabaseCreds));
+      logger.info('');
+    }
+  }
+  
   // Always use self-hosted mode (full migration)
   logger.info('🏠 Creating self-hosted backend (PostgreSQL + Prisma)...');
   await writeSelfHostedBackendScaffold(backendDir, allDependencies, allEnvVars, {
     config: config as ConverterConfig,
     functionNames: functionsInfo.map(fn => fn.name),
+    additionalModels: introspectedModels,
   });
 
   // Copy and transform shared code first

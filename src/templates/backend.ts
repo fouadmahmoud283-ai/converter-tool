@@ -1137,10 +1137,54 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Not Found', path: req.path });
 });
 
+/**
+ * Sync users to profiles table on startup
+ * Ensures FK constraints work for tables referencing profiles
+ */
+async function syncUsersToProfiles() {
+  try {
+    // Check if profiles table exists
+    if (!(prisma as any).profiles) {
+      return;
+    }
+    
+    // Get all users without a profile
+    const users = await prisma.user.findMany();
+    
+    for (const user of users) {
+      try {
+        // Check if profile exists (by id or user_id)
+        const existingById = await (prisma as any).profiles.findUnique({ where: { id: user.id } }).catch(() => null);
+        const existingByUserId = await (prisma as any).profiles.findFirst({ where: { user_id: user.id } }).catch(() => null);
+        
+        if (!existingById && !existingByUserId) {
+          await (prisma as any).profiles.create({
+            data: {
+              id: user.id,
+              user_id: user.id,
+              name: user.fullName || user.email,
+              created_at: user.createdAt,
+              updated_at: new Date(),
+            },
+          });
+          console.log(\`✓ Created profile for user: \${user.email}\`);
+        }
+      } catch (err) {
+        // Skip if profile creation fails (might be schema mismatch)
+      }
+    }
+  } catch (err) {
+    console.warn('Profile sync skipped:', err instanceof Error ? err.message : err);
+  }
+}
+
 // Start server
 const port = Number(process.env.PORT ?? ${config.port ?? 3001});
-const server = app.listen(port, () => {
-  console.log(\`
+
+// Sync users to profiles before starting
+syncUsersToProfiles().then(() => {
+  const server = app.listen(port, () => {
+    console.log(\`
 🚀 Self-Hosted Express server running!
    Local:    http://localhost:\${port}
    API:      http://localhost:\${port}\${basePath}
@@ -1150,11 +1194,12 @@ const server = app.listen(port, () => {
    Health:   http://localhost:\${port}/health${config.swagger ? '\n   Docs:     http://localhost:${port}/api-docs' : ''}
 
 📦 Mode: Self-Hosted (PostgreSQL + JWT Auth + File Storage)
-  \`);
-});
+    \`);
+  });
 
-// Setup graceful shutdown
-setupGracefulShutdown(server);
+  // Setup graceful shutdown
+  setupGracefulShutdown(server);
+});
 `;
 
   await fs.writeFile(path.join(backendDir, 'src', 'index.ts'), index, 'utf8');

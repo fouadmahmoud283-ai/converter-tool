@@ -176,19 +176,38 @@ export async function signUp(
   // This ensures FK constraints on tables referencing profiles.id work correctly
   try {
     if ((prisma as any).profiles) {
+      // Try to create profile with common field patterns
+      // Different Supabase schemas may have different profile structures
       await (prisma as any).profiles.create({
         data: {
-          id: user.id,
-          email: user.email,
-          full_name: metadata?.fullName || null,
+          id: user.id,                              // Primary key (same as user id for simple FK)
+          user_id: user.id,                         // Foreign key to users table
+          name: metadata?.fullName || user.email,   // Display name
           created_at: new Date(),
           updated_at: new Date(),
         },
       });
+      console.log('Created profile for user:', user.id);
     }
-  } catch (profileError) {
-    // Profile creation is optional - log but don't fail signup
-    console.warn('Could not create profile (may already exist or table structure differs):', profileError);
+  } catch (profileError: any) {
+    // If profile creation fails due to schema mismatch, try alternative field names
+    try {
+      if ((prisma as any).profiles) {
+        await (prisma as any).profiles.create({
+          data: {
+            user_id: user.id,
+            email: user.email,
+            full_name: metadata?.fullName || null,
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+        console.log('Created profile (alt schema) for user:', user.id);
+      }
+    } catch (altError) {
+      // Profile creation is optional - log but don't fail signup
+      console.warn('Could not create profile:', profileError.message || profileError);
+    }
   }
   
   // Generate tokens

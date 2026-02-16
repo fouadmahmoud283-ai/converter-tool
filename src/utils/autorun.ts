@@ -15,6 +15,12 @@ export interface AutoRunOptions {
 
 export interface SelfHostedAutoRunOptions extends AutoRunOptions {
   storageProvider?: 'local' | 'minio' | 'both';
+  dbConfig?: {
+    name?: string;
+    user?: string;
+    password?: string;
+    port?: number;
+  };
 }
 
 /**
@@ -23,9 +29,16 @@ export interface SelfHostedAutoRunOptions extends AutoRunOptions {
 export async function generateSelfHostedEnvFile(
   backendDir: string,
   logger: Logger,
-  storageProvider?: 'local' | 'minio' | 'both'
+  storageProvider?: 'local' | 'minio' | 'both',
+  dbConfig?: { name?: string; user?: string; password?: string; port?: number }
 ): Promise<void> {
   const backendEnvPath = path.join(backendDir, '.env');
+  
+  // Database config with defaults
+  const dbName = dbConfig?.name || 'app';
+  const dbUser = dbConfig?.user || 'postgres';
+  const dbPassword = dbConfig?.password || 'postgres';
+  const dbPort = dbConfig?.port || 5432;
   
   // Generate random secrets
   const jwtSecret = Buffer.from(Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)).toString('base64');
@@ -39,7 +52,7 @@ NODE_ENV=development
 CORS_ORIGIN=http://localhost:5173,http://localhost:8080
 
 # PostgreSQL Database
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/myapp
+DATABASE_URL=postgresql://${dbUser}:${dbPassword}@localhost:${dbPort}/${dbName}
 
 # JWT Authentication
 JWT_SECRET=${jwtSecret}
@@ -462,7 +475,7 @@ export async function waitForPostgres(
  * Run the full auto-setup process for self-hosted mode
  */
 export async function autoSetupSelfHosted(options: SelfHostedAutoRunOptions): Promise<void> {
-  const { backendDir, frontendDir, projectDir, logger, storageProvider } = options;
+  const { backendDir, frontendDir, projectDir, logger, storageProvider, dbConfig } = options;
   const backendPort = options.backendPort ?? 3001;
   const frontendPort = options.frontendPort ?? 5173;
   
@@ -488,7 +501,7 @@ export async function autoSetupSelfHosted(options: SelfHostedAutoRunOptions): Pr
     logger.info('\n🚀 Starting self-hosted setup...\n');
 
     // 1. Generate .env file for self-hosted backend
-    await generateSelfHostedEnvFile(backendDir, logger, storageProvider);
+    await generateSelfHostedEnvFile(backendDir, logger, storageProvider, dbConfig);
 
     // 2. Check if Docker is running
     const dockerRunning = await isDockerRunning(logger);

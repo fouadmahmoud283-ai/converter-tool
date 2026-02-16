@@ -209,7 +209,8 @@ export async function convertRepository(options: ConvertOptions): Promise<void> 
     frontendDir: projectInfo.frontendDir,
     projectDir: targetDir,
     logger,
-    storageProvider: config.selfHosted?.storage?.provider
+    storageProvider: config.selfHosted?.storage?.provider,
+    dbConfig: config.selfHosted?.database
   });
 }
 

@@ -596,6 +596,59 @@ function getPrismaModel(tableName: string): any {
 }
 
 /**
+ * Check if a string looks like a date (YYYY-MM-DD or similar patterns)
+ */
+function isDateString(value: string): boolean {
+  // Match YYYY-MM-DD format
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return true;
+  // Match YYYY-MM-DDTHH:MM:SS (already ISO format)
+  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) return true;
+  return false;
+}
+
+/**
+ * Convert date strings to ISO-8601 DateTime format for Prisma
+ * Handles: "2026-02-16" -> "2026-02-16T00:00:00.000Z"
+ */
+function convertDates(data: any): any {
+  if (data === null || data === undefined) return data;
+  
+  if (typeof data === 'string') {
+    // Convert date-only strings to full ISO DateTime
+    if (/^\d{4}-\d{2}-\d{2}$/.test(data)) {
+      return new Date(data + 'T00:00:00.000Z').toISOString();
+    }
+    return data;
+  }
+  
+  if (Array.isArray(data)) {
+    return data.map(item => convertDates(item));
+  }
+  
+  if (typeof data === 'object') {
+    const converted: any = {};
+    for (const [key, value] of Object.entries(data)) {
+      // Check if key suggests it's a date field
+      const isDateField = key.toLowerCase().includes('date') || 
+                          key.toLowerCase().includes('_at') ||
+                          key === 'created_at' || 
+                          key === 'updated_at' ||
+                          key === 'createdAt' ||
+                          key === 'updatedAt';
+      
+      if (isDateField && typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        converted[key] = new Date(value + 'T00:00:00.000Z').toISOString();
+      } else {
+        converted[key] = convertDates(value);
+      }
+    }
+    return converted;
+  }
+  
+  return data;
+}
+
+/**
  * Parse query string filters from Supabase-style format
  * Field names are kept as-is (don't convert to camelCase)
  */
@@ -763,7 +816,10 @@ router.post('/:table', async (req: Request, res: Response, next: NextFunction) =
       return res.status(404).json({ error: 'Not Found', message: \`Table "\${table}" not found\` });
     }
     
-    const item = await model.create({ data: req.body });
+    // Convert date strings to ISO-8601 DateTime format
+    const data = convertDates(req.body);
+    
+    const item = await model.create({ data });
     res.status(201).json(item);
   } catch (error) {
     next(error);
@@ -780,9 +836,12 @@ router.patch('/:table/:id', async (req: Request, res: Response, next: NextFuncti
       return res.status(404).json({ error: 'Not Found', message: \`Table "\${table}" not found\` });
     }
     
+    // Convert date strings to ISO-8601 DateTime format
+    const data = convertDates(req.body);
+    
     const item = await model.update({
       where: { id },
-      data: req.body,
+      data,
     });
     
     res.json(item);

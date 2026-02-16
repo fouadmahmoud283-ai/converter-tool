@@ -120,7 +120,6 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["public"]
 }
 `;
     
@@ -188,9 +187,9 @@ async function runPrismaIntrospection(
     const npmCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
     
     try {
-      // Run prisma db pull
+      // Run prisma db pull with --force to overwrite existing schema
       execSync(
-        `${npmCmd} prisma db pull --schema=prisma/schema.prisma`,
+        `${npmCmd} prisma db pull --schema=prisma/schema.prisma --force`,
         {
           cwd: workDir,
           encoding: 'utf8',

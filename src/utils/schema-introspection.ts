@@ -112,14 +112,18 @@ export async function introspectSupabaseSchema(
     const schemaPath = path.join(tempDir, 'prisma', 'schema.prisma');
     await fs.ensureDir(path.dirname(schemaPath));
     
+    // Enable multiSchema preview feature to handle cross-schema references
+    // (Supabase tables often reference auth.users)
     const minimalSchema = `
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  schemas  = ["public", "auth"]
 }
 `;
     

@@ -356,6 +356,11 @@ export function filterSupabaseInternalTables(models: string[]): string[] {
   
   return models
     .filter(model => {
+      // Skip auth schema models entirely
+      if (/@@schema\(["']auth["']\)/.test(model)) {
+        return false;
+      }
+      
       // Extract model/table name
       const nameMatch = model.match(/model\s+(\w+)/);
       const mapMatch = model.match(/@@map\(["'](\w+)["']\)/);
@@ -381,6 +386,11 @@ export function filterSupabaseInternalTables(models: string[]): string[] {
       const lines = model.split('\n');
       const filteredLines = lines.filter(line => {
         const trimmed = line.trim();
+        
+        // Skip @@schema directives (not needed for single-schema self-hosted)
+        if (/^\s*@@schema\(/.test(line)) {
+          return false;
+        }
         
         // Skip lines that reference 'users' type (Supabase auth.users)
         // Patterns:

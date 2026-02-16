@@ -250,6 +250,112 @@ volumes:
 }
 
 /**
+ * Generate Docker Compose for development (only database and storage services)
+ * This is used during auto-setup to avoid building the API Docker image
+ */
+export function generateSelfHostedDockerComposeDev(config: SelfHostedConfig): string {
+  const dbConfig = config.database || {};
+  const storageConfig = config.storage || { provider: 'local' };
+  const includeMinIO = storageConfig.provider === 'minio' || storageConfig.provider === 'both';
+  
+  const dbName = dbConfig.name || 'myapp';
+  const dbUser = dbConfig.user || 'postgres';
+  const dbPassword = dbConfig.password || 'postgres';
+  
+  const minioConfig = storageConfig.minio || {};
+  const minioAccessKey = minioConfig.accessKey || 'minioadmin';
+  const minioSecretKey = minioConfig.secretKey || 'minioadmin';
+  const minioBucket = minioConfig.bucket || 'uploads';
+  
+  let compose = `# Development Docker Compose - Database and Storage Services Only
+# For production deployment, use docker-compose.yml
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: ${dbName.replace(/[^a-zA-Z0-9]/g, '_')}_db
+    ports:
+      - "\${DB_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_DB=${dbName}
+      - POSTGRES_USER=${dbUser}
+      - POSTGRES_PASSWORD=${dbPassword}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${dbUser} -d ${dbName}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+`;
+
+  if (includeMinIO) {
+    compose += `
+  # MinIO Object Storage (S3-compatible)
+  minio:
+    image: minio/minio:latest
+    container_name: ${dbName.replace(/[^a-zA-Z0-9]/g, '_')}_minio
+    ports:
+      - "\${MINIO_PORT:-9000}:9000"
+      - "\${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      - MINIO_ROOT_USER=\${MINIO_ACCESS_KEY:-${minioAccessKey}}
+      - MINIO_ROOT_PASSWORD=\${MINIO_SECRET_KEY:-${minioSecretKey}}
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # MinIO initial bucket setup
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 \${MINIO_ACCESS_KEY:-${minioAccessKey}} \${MINIO_SECRET_KEY:-${minioSecretKey}};
+      mc mb myminio/${minioBucket} --ignore-existing;
+      mc anonymous set download myminio/${minioBucket}/public;
+      exit 0;
+      "
+    networks:
+      - app-network
+`;
+  }
+
+  compose += `
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres-data:`;
+
+  if (includeMinIO) {
+    compose += `
+  minio-data:`;
+  }
+
+  compose += '\n';
+
+  return compose;
+}
+
+/**
  * Generate Dockerfile for self-hosted mode (includes Prisma)
  */
 export function generateSelfHostedDockerfile(): string {

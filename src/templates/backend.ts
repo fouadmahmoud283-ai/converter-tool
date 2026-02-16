@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import { generateDependenciesObject } from '../utils/dependencies.js';
 import { generateEnvExample } from '../utils/env.js';
 import { ConverterConfig, defaultConfig, SelfHostedConfig } from '../config.js';
-import { generateDockerfile, generateDockerCompose, generateDockerIgnore, generateSelfHostedDockerCompose, generateSelfHostedDockerfile, generateSelfHostedEnvExample } from './docker.js';
+import { generateDockerfile, generateDockerCompose, generateDockerIgnore, generateSelfHostedDockerCompose, generateSelfHostedDockerComposeDev, generateSelfHostedDockerfile, generateSelfHostedEnvExample } from './docker.js';
 import { generateSwaggerConfig, generateSwaggerSetup } from './swagger.js';
 import { generateValidationMiddleware, generateSchemasIndex } from './validation.js';
 import { generateAuthMiddleware, generateAuthTypes } from './auth.js';
@@ -913,6 +913,11 @@ main()
     await fs.writeFile(
       path.join(backendDir, 'docker-compose.yml'),
       generateSelfHostedDockerCompose(selfHosted),
+      'utf8'
+    );
+    await fs.writeFile(
+      path.join(backendDir, 'docker-compose.dev.yml'),
+      generateSelfHostedDockerComposeDev(selfHosted),
       'utf8'
     );
     await fs.writeFile(

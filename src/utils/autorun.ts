@@ -497,19 +497,19 @@ export async function autoSetupSelfHosted(options: SelfHostedAutoRunOptions): Pr
       logger.info('\nManual setup steps:');
       logger.info('  1. Start Docker Desktop');
       logger.info(`  2. cd ${backendDir}`);
-      logger.info('  3. docker-compose up -d');
+      logger.info('  3. docker compose -f docker-compose.dev.yml up -d');
       logger.info('  4. npm install');
       logger.info('  5. npm run db:generate');
-      logger.info('  6. npm run db:migrate');
+      logger.info('  6. npm run db:push');
       logger.info('  7. npm run dev');
       return;
     }
 
-    // 3. Start Docker containers
+    // 3. Start Docker containers (dev mode - no API service)
     logger.info('📦 Starting Docker containers...');
     const dockerUp = await runCommand(
       dockerCmd,
-      ['compose', 'up', '-d'],
+      ['compose', '-f', 'docker-compose.dev.yml', 'up', '-d'],
       backendDir,
       logger,
       'Starting PostgreSQL' + (storageProvider !== 'local' ? ' + MinIO' : '')
@@ -519,7 +519,7 @@ export async function autoSetupSelfHosted(options: SelfHostedAutoRunOptions): Pr
       logger.error('Failed to start Docker containers');
       logger.info('\nTry manually:');
       logger.info(`  cd ${backendDir}`);
-      logger.info('  docker compose up -d');
+      logger.info('  docker compose -f docker-compose.dev.yml up -d');
       return;
     }
 
@@ -650,17 +650,27 @@ export async function autoSetupSelfHosted(options: SelfHostedAutoRunOptions): Pr
  */
 async function getPostgresContainerName(backendDir: string, logger: Logger): Promise<string> {
   try {
-    const dockerComposePath = path.join(backendDir, 'docker-compose.yml');
-    const content = await fs.readFile(dockerComposePath, 'utf8');
+    // Try dev compose file first, then fallback to regular docker-compose.yml
+    const devComposePath = path.join(backendDir, 'docker-compose.dev.yml');
+    const regularComposePath = path.join(backendDir, 'docker-compose.yml');
     
-    // Try to find container_name for postgres service
-    const match = content.match(/postgres[\s\S]*?container_name:\s*(\S+)/);
-    if (match) {
-      return match[1];
+    let content = '';
+    if (await fs.pathExists(devComposePath)) {
+      content = await fs.readFile(devComposePath, 'utf8');
+    } else if (await fs.pathExists(regularComposePath)) {
+      content = await fs.readFile(regularComposePath, 'utf8');
+    }
+    
+    if (content) {
+      // Try to find container_name for postgres service
+      const match = content.match(/postgres[\s\S]*?container_name:\s*(\S+)/);
+      if (match) {
+        return match[1];
+      }
     }
   } catch {
     // Fallback to default
   }
   
-  return 'echo_change_db';
+  return 'myapp_db';
 }

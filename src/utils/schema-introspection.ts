@@ -407,7 +407,17 @@ export function filterSupabaseInternalTables(models: string[]): string[] {
         
         return true;
       });
-      return filteredLines.join('\n');
+      
+      // Convert UUID types to String (Supabase often stores non-UUID text IDs in UUID columns)
+      // This prevents "Error creating UUID, invalid character" errors at runtime
+      const convertedLines = filteredLines.map(line => {
+        // Convert @db.Uuid to regular String
+        // e.g., "id String @id @db.Uuid" -> "id String @id"
+        // e.g., "user_id String? @db.Uuid" -> "user_id String?"
+        return line.replace(/@db\.Uuid/g, '');
+      });
+      
+      return convertedLines.join('\n');
     });
 }
 

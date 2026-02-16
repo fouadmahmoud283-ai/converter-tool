@@ -600,9 +600,9 @@ function getPrismaModel(tableName: string): any {
  */
 function isDateString(value: string): boolean {
   // Match YYYY-MM-DD format
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return true;
+  if (/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return true;
   // Match YYYY-MM-DDTHH:MM:SS (already ISO format)
-  if (/^\d{4}-\d{2}-\d{2}T/.test(value)) return true;
+  if (/^\\d{4}-\\d{2}-\\d{2}T/.test(value)) return true;
   return false;
 }
 
@@ -614,9 +614,9 @@ function convertDates(data: any): any {
   if (data === null || data === undefined) return data;
   
   if (typeof data === 'string') {
-    // Convert date-only strings to full ISO DateTime
-    if (/^\d{4}-\d{2}-\d{2}$/.test(data)) {
-      return new Date(data + 'T00:00:00.000Z').toISOString();
+    // Convert date-only strings to full ISO DateTime (simple string concat, no Date object)
+    if (/^\\d{4}-\\d{2}-\\d{2}$/.test(data)) {
+      return data + 'T00:00:00.000Z';
     }
     return data;
   }
@@ -628,19 +628,7 @@ function convertDates(data: any): any {
   if (typeof data === 'object') {
     const converted: any = {};
     for (const [key, value] of Object.entries(data)) {
-      // Check if key suggests it's a date field
-      const isDateField = key.toLowerCase().includes('date') || 
-                          key.toLowerCase().includes('_at') ||
-                          key === 'created_at' || 
-                          key === 'updated_at' ||
-                          key === 'createdAt' ||
-                          key === 'updatedAt';
-      
-      if (isDateField && typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-        converted[key] = new Date(value + 'T00:00:00.000Z').toISOString();
-      } else {
-        converted[key] = convertDates(value);
-      }
+      converted[key] = convertDates(value);
     }
     return converted;
   }
